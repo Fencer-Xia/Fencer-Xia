@@ -1,7 +1,13 @@
 function [U1, desired_angles, l_hat_dot] = UAV_position_controller_AFBC(current_state, desired_state, l_hat, params)
-% UAV_position_controller_AFBC - 纯净反步法位置环 (修复倒退起飞现象)
+% UAV_position_controller_AFBC - 无模型纯净反步法位置环 (紧凑标量版)
 
-    g = params.g; m = params.m;
+    g = params.g; 
+    
+    % ==========================================================
+    % 【核心替换】：剥离真实物理质量，使用紧凑虚拟质量标量
+    % ==========================================================
+    m_uav_virtual = 1.55; 
+
     beta = params.beta; Gamma = params.Gamma;
 
     K1_kin = diag([1.5, 1.5, 2.0]); 
@@ -21,18 +27,11 @@ function [U1, desired_angles, l_hat_dot] = UAV_position_controller_AFBC(current_
     max_err = 3.0;
     z1_sat = max(min(z1, max_err), -max_err);
 
-    % ================= 修复倒退起飞核心 =================
     % 剥离出反馈纠偏速度
     feedback_v = K1_kin * tanh(z1_sat) + K2_kin * (abs(z1_sat).^(2*beta-1)) .* tanh(z1_sat / 0.1);
-    
-    % 【关键】：限制反馈纠偏速度的最大值。
-    % 由于期望前飞速度大约是 2.5m/s，将纠偏速度限制在 2.0m/s，
-    % 确保 alpha_p (期望机体速度) 始终向前，杜绝无人机因为出生太靠前而掉头倒飞。
     feedback_v = max(min(feedback_v, 2.0), -2.0); 
     
-    % 计算虚拟速度
     alpha_p = desired_state.vel - feedback_v;
-    % ====================================================
 
     z2 = vel_inertial - alpha_p;
 
@@ -45,10 +44,13 @@ function [U1, desired_angles, l_hat_dot] = UAV_position_controller_AFBC(current_
     norm_vel_inertial = norm(vel_inertial);
     sigma = l_hat(1) + l_hat(2) * norm_vel_inertial + l_hat(3) * norm_vel_inertial^2;
 
-    F_d = m * alpha_p_dot - z1 - K1_dyn * tanh(z2) - sigma * tanh(z2/0.1) - K2_dyn * diag(abs(z2).^(2*beta-1)) * tanh(z2 / 0.1);
-    Force_total_desired = F_d + [0; 0; m*g];
+    % ==========================================================
+    % 纯无模型架构计算：全部使用 m_uav_virtual 标量计算前馈与补偿
+    % ==========================================================
+    F_d = m_uav_virtual * alpha_p_dot - z1 - K1_dyn * tanh(z2) - sigma * tanh(z2/0.1) - K2_dyn * diag(abs(z2).^(2*beta-1)) * tanh(z2 / 0.1);
+    Force_total_desired = F_d + [0; 0; m_uav_virtual * g];
 
-    max_thrust_local = m * g * 2.5; 
+    max_thrust_local = m_uav_virtual * g * 2.5; 
     if norm(Force_total_desired) > max_thrust_local
         Force_total_desired = (Force_total_desired / norm(Force_total_desired)) * max_thrust_local;
     end
